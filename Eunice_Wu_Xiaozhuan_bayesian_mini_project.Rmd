@@ -1,0 +1,387 @@
+---
+title: "Bayesian Regression - Movies"
+author: "Wu Xiaozhuan"
+date: "2/18/2021"
+output: html_document
+---
+
+* * *
+
+## Preparation 
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(BAS)
+library("GGally")
+library("RColorBrewer")
+library(broom)
+library(foreign) 
+library(MASS)
+
+```
+
+### Load data
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+* * *
+
+## Part 1: Data
+
+The "movies" dataset is comprised of 651 randomly sampled movies produced and released from 1970 to 2014 in the United States. The information and details were collected from Rotten Tomatoes and IMBD and the collected details included but not limited to movie title, movie type/genre, runtime, theater/DVD releasing date, Rotten Tomatoes/IMBD rank etc.
+
+There is no information of how the random sample has been conducted. Thus, there is a probability of high sensitivity to random variations in the consideration of its representatives of all the movies of this time. Besides, the popularity estimates can be possibly biased, as the measure of popularity consists of the opinions of Rotten Tomatoes' and IMDB's users. This study can be generalised to the US movie industry from 1970 to 2014, but no causality relation can be proved.
+
+```{r summary}
+summary(movies)
+```
+
+* * *
+
+## Part 2: Data manipulation
+
+The new variables have been added to the dataset using the mutate function in the dplyr package following the guidelines presented below:
+
+- `feature_film` with levels yes (movies that are feature films) and no
+- `drama` with levels yes (movies that are dramas) and no 
+- `mpaa_rating_R` with levels yes (movies that are R rated) and no 
+- `oscar_season` with levels yes (if movie is released in November, October, or December) and no 
+- `summer_season` with levels yes (if movie is released in May, June, July, or August) and no 
+        
+```{r}
+movies_new <- movies %>% 
+  mutate(feature_film = ifelse(title_type == "Feature Film", 'yes', 'no'),
+         drama = ifelse(genre == "Drama", 'yes', 'no'),
+         mpaa_rating_R = ifelse(mpaa_rating == "R", 'yes', 'no'),
+         oscar_season = ifelse(thtr_rel_month %in% c("10", "11", "12"), 'yes', 'no'),
+         summer_season = ifelse(thtr_rel_month %in% c("5","6", "7", "8"), 'yes', 'no'))
+movies_new
+```
+
+Now the dataset is ready for the analysis.
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+For the better understanding of the dataset, it is necessary to represent the dataset through the visualizations and summary tables. As `audience_score` variable is the responsive variable in this particular case, the relationship between `audience_score` and other added variables is crucial to explore.
+First, the descriptive statistics of the `audience_score` should be idenified:
+
+```{r}
+
+summary <- summarytools::descr(movies_new$audience_score, stats = c("min","max", "mean", "sd", "skewness", "kurtosis"), transpose = FALSE, headings = FALSE, round.digits = 3)
+summary
+```
+
+It can be seen that the `audience_score` varies from 11 to 97. On average, it takes the value of 62.363. Its distribution is skewed to the left and flatter than compared to the normal distribution.
+Next, the boxplots have been constructed to understand the relationship between response variable and newly added explanatory variables.
+
+```{r}
+require(reshape2)
+movies_new_variables <- movies_new %>%  dplyr::select(title, audience_score, feature_film,drama,mpaa_rating_R,oscar_season, summer_season)
+movies_new_variables
+movies_new_variables_melt <- melt(movies_new_variables, measure.vars = 3:7)
+ggplot(movies_new_variables_melt, aes(x=value, y=audience_score, fill=variable)) + 
+geom_boxplot()+
+  facet_grid(.~variable)+
+  xlab("Regression Variables") +
+  ylab("AUDIENCE SCORE") +
+  scale_fill_brewer(palette = "Greens")
+
+```
+
+There are 60 non-feature films and 591 feature films in this dataset. We can see from the boxplot that there is a big gap between the audience scores of feature films and non-feature films (documentary, TV Movie). The possible reason of this is that feature films have higher standards and they are estimated more carefully and strictly. Also, drama movies seemed to be scored higher than other types of movies. From the boxplot we are not able to see a significant gaps in the scores of the movies launched in the summer and those, which have been launched not in the summer, as well as the gaps in the scores of the movies launched at the end of the year (Oscar season) and those, which have been launched not at the end of the year. 
+
+* * *
+
+## Part 4: Modeling
+
+The Bayesian regression model is developed to predict `audience_score` from the number of explanatory variables, given in the assignment. Diagnostic of the model and interpretation of the model are conducted as well. The following explanatory variables are mentioned in the assignment to be included in the model:`feature_film`,` drama`, `runtime`, `mpaa_rating_R`, `thtr_rel_year`, `oscar_season`, `summer_season`, `imdb_rating`, `imdb_num_votes`, `critics_score`, `best_pic_nom`, `best_pic_win`, `best_actor_win`, `best_actress_win`, `best_dir_win`, `top200_box`.
+
+First step is to exclude two variables from this list, which are `imdb_rating`, `imdb_num_votes`. It should be made because `audience_score` is already based on Rotten Tomato and IMBD scores. Thus, including these variables in the model is not appropriate according to the common sense.
+
+Since there are over 10 predictors in total in the requirement, it is necessary to eliminate some variables based on the model posterior probabilities. First, `bas.lm` function should be used to include all the required predictors. In addition to the uniform model prior, a BIC prior have been  used as well. 
+
+```{r}
+movies_new_regression <- movies_new %>% dplyr::select(title,audience_score, feature_film, drama, runtime, mpaa_rating_R, thtr_rel_year, oscar_season, summer_season, critics_score, best_pic_nom, best_pic_win, best_actor_win, best_actress_win, best_dir_win, top200_box)
+
+movies_new_regression <-na.omit(movies_new_regression)
+
+reg1_BIC <- bas.lm(audience_score ~ ., data=movies_new_regression[-1],
+               prior="BIC",
+               modelprior = uniform())
+
+coef <- coef(reg1_BIC, estimator = "BMA")
+
+coefs <- data.frame(parameter = coef$namesx, post_SD = coef$postsd, post_mean = coef$postmean, post_pne0 = coef$probne0) %>%
+  arrange(post_pne0) %>% 
+  filter(parameter != "Intercept")
+
+coefs$parameter <- factor(coefs$parameter, levels = coefs$parameter[order(coefs$post_pne0, decreasing = TRUE)])
+
+high_prob <- data.frame(parameter = coefs$parameter, post_pne0 = coefs$post_pne0) %>% 
+  filter(post_pne0 > 0.5)
+
+# Plot the Data
+ggplot(coefs, aes(x = parameter, y = post_pne0)) + 
+  geom_pointrange(aes(ymax = post_pne0), ymin = 0) +
+    labs(x="Explanatory Variable", y = "Marginal Inclusion Probability", title = "Posterior Marginal Inclusion Probabilities")+
+  geom_hline(yintercept=0.5, col="red") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+```
+
+The graph has been plotted for the interpretation of the information given by the calculation of the marginal posterior probabilites. These probabilities show the existence of relationship between the `audience_score` and explanatory variables. As it can be seen from the graph, the most significant relationship (prob>0.5) is between the `audience_score` and explanatory variables of `critics_score`, `feature_filmyes` and `best_pic_nomyes`. The Bayesian Model Average (or BMA) is applied in this analysis, as this method accounts for the largest ambiguity in model creation by providing all the probability for any model conceivable.
+
+Next, it is necessary to perform stepwise algorithm to choose a model. The formula k = log(n) is added in the function and referred to as BIC or SBC.
+
+
+```{r}
+# Compute the total number of observations
+n = nrow(movies_new_regression)
+
+# Full model using all predictors
+movies_reg_full = lm(audience_score ~ ., data=movies_new_regression[-1])
+
+# Perform BIC elimination from full model
+# k = log(n): penalty for BIC rather than AIC
+movies_reg_full.step = step(movies_reg_full, k=log(n))   
+```
+
+The last step of the output is the end result of the "stepwise regression". The algoritm is as follows: at each step, variable terms are evaluated for dropping, if dropping the selected variable reduces the AIC, it is eliminated from the model and the whole procedure repeats until no single variable can be dropped. The minimum AIC that can be reached by the algorithm in this particular case is 3472.72.
+
+Logmarg information of the estimated model can be also used to find the model with the highest log of marginal likelihood, which is consistent with the model with the smallest BIC. The modelprior argument is set as uniform() here to assign equal prior probability for each possible model. 
+
+```{r}
+
+# The logmarg information inside the reg1_BIC summary list records the log of marginal likelihood of each model after seeing the data ln(p(data | M)). Recall that this is approximately proportional to negative BIC when the sample size n is large $BIC\thickapprox−2ln(p(data | M))$
+
+# Find the index of the model with the largest logmarg
+
+best = which.max(reg1_BIC$logmarg)
+
+# Retreat the index of variables in the best model, with 0 as the index of the intercept
+bestmodel = reg1_BIC$which[[best]]
+bestmodel
+
+# Create an indicator vector indicating which variables are used in the best model
+bestgamma = rep(0, reg1_BIC$n.vars) 
+
+# Create a 0 vector with the same dimension of the number of variables in the full model
+bestgamma[bestmodel + 1] = 1  
+
+# Change the indicator to 1 where variables are used
+bestgamma
+
+```
+
+From the indicator vector it can be concluded that the intercept (indexed as 0), `feature_filmyes` (indexed as 1), `summer_seasonyes` (indexed as 8), and `critics_score` (indexed as 9) are used in the best model, with 1’s in the corresponding slots of the 15-dimensional vector.
+
+The next step is to estimate the coefficiens for the best BIC model. The following steps should be made:
+
+```{r}
+# Fit the best BIC model by imposing which variables to be used using the indicators
+Movie_regression.bestBIC = bas.lm(audience_score ~ ., data=movies_new_regression[-1],
+                     prior = "BIC", n.models = 1,  # We only fit 1 model
+                     bestmodel = bestgamma,  # We use bestgamma to indicate variables 
+                     modelprior = uniform())
+
+# Retreat coefficients information
+Movie_regression.coef = coef(Movie_regression.bestBIC)
+
+# Retreat bounds of credible intervals
+output2 = confint(Movie_regression.coef)[, 1:2]
+
+# Combine results and construct summary table
+Movie_regression.coef_BIC = cbind(Movie_regression.coef$postmean, Movie_regression.coef$postsd, output2)
+names = c("post mean", "post sd", colnames(output2))
+colnames(Movie_regression.coef_BIC) = names
+Movie_regression.coef_BIC
+coef(reg1_BIC)
+```
+
+By the comparison of the coefficients of the best BIC model and the original model it can be seen that all the coefficients except `critics_score`, `feature_filmyes` and `best_pic_nomyes` are equal to zero in the best BIC model, while original model has different coefficients for each variable. 
+
+Now, using the summary of results of `bas.lm` function we will learn about the posterior probability of all possible models.
+
+```{r}
+# Calculating Posterior Probability in R
+movies_best_bas = bas.lm(audience_score ~ feature_film + critics_score + best_pic_nom, 
+                 data=movies_new_regression[-1], prior = "BIC",
+                 modelprior = uniform())
+
+names(movies_best_bas)
+
+round(summary(movies_best_bas), 3)
+
+print(movies_best_bas)
+
+image(movies_best_bas, rotate = F)
+
+```
+
+There is no unanimous decision among the models to include any variable in the model. However, the first model includes intercept, `critics_score`, `feature_filmyes` and `best_pic_nomyes`, with a posterior probability of about 0. The model with the 2nd highest posterior probability, which includes only the intercept, `critics_score` and `best_pic_nomyes`, has posterior probability of about 0. 
+
+Now we need to see how to obtain an Bayesian model averaging (BMA) results using model posterior probability. The coefficients can be obtained by the coef function.
+
+```{r}
+# Bayesian Model Averaging Using Posterior Probability
+# Coefficient Summary under BMA
+movies_best_bas_coef = coef(movies_best_bas)
+movies_best_bas_coef
+par(mfrow = c(2, 2))
+plot(movies_best_bas_coef, subset = c(2:4))
+
+```
+The table with the results shows the posterior average, the posterior standard deviation, and the posterior inclusion probability (pip) of each coefficient. For potential forecasts, the posterior mean of the coefficient under BMA will be used. The posterior standard deviation gives an indicator of the coefficient's variability.
+This plot is consistent with the above table with the results, which shows that the distributions of the variables have a relatively small mass at 0. There is a slighly little tip at 0 for the variable `critics_score`, suggesting that the posterior inclusion probability of `critics_score` is not precisely 1. Since the probability mass for `critics_score` to be 0 is so small, that it is almost inevitable that `critics_score` should be included under the BMA.
+
+Diagnistic of the residuals should be made after the estimation:
+
+```{r}
+plot(movies_best_bas, which = 1, add.smooth = F, 
+     ask = F, pch = 16, sub.caption="", caption="")
+
+```
+
+This graph shows that there is still the structure in the residuals that is not captured by the model.
+
+Markov Chain Monte Carlo (MCMC) can be also used to explore model spaces and implement Bayesian model averaging to estimate quantities of interest. MCMC is used to select the best model with Zellner-Siow Prior.
+
+```{r}
+#Bayesian Models and Diagnostics
+movie.ZS =  bas.lm(audience_score ~ ., data=movies_new_regression[-1],
+                   prior="ZS-null", modelprior=uniform(), method = "MCMC") 
+diagnostics(movie.ZS, type="pip", col = "blue", pch = 16, cex = 1.5)
+diagnostics(movie.ZS, type = "model", col = "blue", pch = 16, cex = 1.5)
+```
+
+First, it is necessary to take a look at the diagnostic plot using diagnostics function to evaluate the outcome to see if the MCMC exploration is running long enough so that the posterior inclusion probability (pip) has converged. As all points are on the 45 degree diagonal, it can be concluded that the posterior inclusion probability of each variable from MCMC have converged well enough to the theoretical posterior inclusion probability. Diagnostics function can be also applied to chck whether the model posterior probability has converged, that is how the second graph has been made. It can be seen from the graph that some of the points are upper from the 45 degree diagonal line. This could mean that the number of iterations of MCMC should be increased.
+
+```{r}
+# Try to increase the number of MCMC iterations
+# Re-run regression using larger number of MCMC iterations
+movie.ZS = bas.lm(audience_score ~ ., data=movies_new_regression[-1],
+                  prior = "ZS-null", modelprior = uniform(),
+                  method = "MCMC", MCMC.iterations = 10 ^ 6)
+
+# Plot diagnostics again
+diagnostics(movie.ZS, type = "model", col = "blue", pch = 16, cex = 1.5)
+```
+
+With the higher number of iterations, most points stay in the 45 degree diagonal line, meaning the posterior inclusion probability from the MCMC method has mostly converged to the theoretical posterior inclusion probability.
+
+Next, it is necessary to check the residuals. 
+
+```{r}
+# Residuals Versus Fitted Values Using BMA
+plot(movie.ZS, which = 1, add.smooth = F, 
+     ask = F, pch = 16, sub.caption="", caption="")
+abline(a = 0, b = 0, col = "darkgrey", lwd = 2)
+#the cumulative sampled model probability.
+plot(movie.ZS, which=2, add.smooth = F, sub.caption="", caption="")
+plot(movie.ZS, which=3, ask=F, caption="", sub.caption="")
+```
+
+By the graph of prediction under MBA, it is seen that lie around the line y=0, and has a constant variance. Observations 323, 373, and 465 may be the potential outliers, which are indicated in the plot. Besides, the second graph shows that after about 750 unique models have been discovered with MCMC sampling, the probability is starting to level off, indicating that these additional models have very small probability and do not contribute substantially to the posterior distribution. By the third graph, it can be concluded that the models with the highest Bayes factors or logs of marginal likelihoods have 4 - 6 predictors. 
+After these steps the "importance" of different predictors can be obtained. 
+
+```{r}
+# the importance of different predictors.
+
+plot(movie.ZS, which = 4, ask = F, caption = "", sub.caption = "", 
+     col.in = "green", col.ex = "lightgrey", lwd = 3)
+
+```
+
+The green lines show the variables where the marginal posterior inclusion probability, is higher than 0.5, meaning that these variables are important for prediction. The variables represented in grey lines have posterior inclusion probability less than 0.5. Small posterior inclusion probability may arise when two or more variables are strongly correlated. Usage of these posterior inclusion probabilities to remove variables should be done carefully.
+
+The image of the model space can be constructed to pay attention on the high posterior probability models:
+
+```{r dpi = 800}
+# the image of the model space.
+
+image(movie.ZS, rotate = F)
+
+# Extract coefficients
+movie.ZS_coef=coef(movie.ZS)
+round(confint(movie.ZS_coef), 3)
+movie.ZS_coef
+```
+Again, we can see the inclusion of `critics_score` in all the models. 
+
+The predictors under MCMC methods and Zellner-Siow prior are the same predictors. Finally, the best model can be chosen:
+
+```{r}
+movies_best_bas_ZS = bas.lm(audience_score ~ feature_film + critics_score + best_pic_nom, 
+                 data=movies_new_regression[-1], prior = "ZS-full",
+                 modelprior = uniform())
+
+names(movies_best_bas_ZS)
+
+round(summary(movies_best_bas_ZS), 3)
+
+print(movies_best_bas_ZS)
+
+image(movies_best_bas_ZS, rotate = F)
+
+movies_best_bas_ZS_coef = coef(movies_best_bas_ZS)
+movies_best_bas_ZS_coef
+par(mfrow = c(2, 2))
+plot(movies_best_bas_ZS_coef, subset = c(2:4))
+```
+
+The inclusion of the mentioned in the tables variables can be proved by the graphs. It is almost inevitable that these variables should be included in the model based on graphs. 
+
+
+* * *
+
+## Part 5: Prediction
+
+For the last part, the `audience_score` should be predicted using the selected model.
+
+The chosen movie is "No Country for Old man" (IMBD URL here: https://www.imdb.com/title/tt0477348/). This movie is a feature film and has a critics score of 93. This movie won Oscar Best Picture in 2007. The audience score is 81.
+
+The predictions has been made using different models:
+
+```{r}
+
+No_country_for_old_man <- data.frame(feature_film = 'yes', critics_score = 93, best_pic_nom = 'yes')
+
+Pred_ZS_BMA <- predict(movies_best_bas_ZS, No_country_for_old_man, estimator = "BMA", se.fit = TRUE)
+Pred_BIC_BMA <- predict(movies_best_bas, No_country_for_old_man, estimator = "BMA", se.fit = TRUE)
+Pred_ZS_BMA$Ypred
+Pred_BIC_BMA$Ypred
+
+Pred_ZS_HPM <- predict(movies_best_bas_ZS, No_country_for_old_man, estimator = "HPM", se.fit = TRUE)
+Pred_BIC_HPM <- predict(movies_best_bas, No_country_for_old_man, estimator = "HPM", se.fit = TRUE)
+Pred_ZS_HPM$Ypred
+Pred_BIC_HPM$Ypred
+
+Pred_ZS_MPM <- predict(movies_best_bas_ZS, No_country_for_old_man, estimator = "MPM", se.fit = TRUE)
+Pred_BIC_MPM <- predict(movies_best_bas, No_country_for_old_man, estimator = "MPM", se.fit = TRUE)
+Pred_ZS_MPM$Ypred
+Pred_BIC_MPM$Ypred
+
+Sum_up_fit <- cbind(Pred_ZS_BMA$fit, Pred_BIC_BMA$fit, Pred_ZS_HPM$fit, Pred_BIC_HPM$fit, Pred_ZS_MPM$fit, Pred_BIC_MPM$fit) 
+colnames(Sum_up_fit) <- c("ZS_BMA","BIC_BMA","ZS_HPM","BIC_HPM", "ZS_MPM", "BIC_MPM") 
+Sum_up_fit
+
+
+```
+
+The audience score of "No country for Old man" stays in the posterior distribution in these three prediction models and it is closest to BMA's prediction. It varies from 85.148 to 87.918, which is a pretty small range. Anyway, BMA's prediction is the best according to its closeness to the actual result.
+
+
+* * *
+
+## Part 6: Conclusion
+
+This regression model has its disadvantages in comparison with other regression models, as it does not provide useful information in predicting the audience score of a movie. It would be better to interpret the model with a timeframe, for example, predict the audience score of a movie in 3 years because the dependent variable (audience score) and some independent variables (Oscar best picture nomination) are happening at the time time. It seems that the prediction with the time range would be better in this research, as some of the inportant variables have been omitted, while they may play important role in dynamic with inclusion of some time lag. Since we are not clear about what makes a movie be nominated for an Oscar, this model does not provide new information for movie producers. 
